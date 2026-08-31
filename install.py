@@ -18,6 +18,7 @@ What it edits (and nothing else):
     common/params_keys.h               declare the SunnyconfPairingCode param
   BEST-EFFORT — nice to have; a UI refactor upstream may move the anchors, the README documents
   the manual equivalent:
+    system/updated/updated.py                             fetch must not recurse into submodules
     pyproject.toml                                        add daemon tests to pytest testpaths
     selfdrive/ui/sunnypilot/layouts/settings/device.py    "Sunnyconf Pairing Code" button (comma 3/3x UI)
     selfdrive/ui/mici/layouts/settings/device.py          "pairing code" button (comma 4 UI)
@@ -97,6 +98,21 @@ def main():
   )], required=True)
 
   # ── BEST-EFFORT ─────────────────────────────────────────────────────────────────────────────────────
+
+  # 2b. updater: git's default on-demand submodule recursion fails the whole fetch when a submodule first
+  #     APPEARS in the fetched commits ("Could not access submodule 'sunnyconf'"). updated.py handles
+  #     submodules explicitly after checkout, so fetch must not recurse. NOTE: this protects updates AFTER
+  #     this code is installed — a device still running pre-sunnyconf code needs the one-time command from
+  #     README.md § "Adding sunnyconf to a device that is already installed".
+  patch("system/updated/updated.py", [(
+    '    ("gc.autoDetach", "false"),\n',
+    '    # a submodule that first appears in the fetched commits (e.g. sunnyconf) is unknown to the current\n'
+    '    # checkout, and the default on-demand recursion then fails the whole fetch. Submodules are handled\n'
+    '    # explicitly after checkout (submodule sync + update --init --recursive); fetch must not recurse.\n'
+    '    ("fetch.recurseSubmodules", "false"),\n',
+    "after",
+    "fetch.recurseSubmodules",
+  )], required=False)
 
   # 3. pytest testpaths (dev machines only; harmless if it fails)
   patch("pyproject.toml", [(

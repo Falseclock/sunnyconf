@@ -77,6 +77,19 @@ daemon still works; set the pairing code from a device shell instead:
 python3 -c "from openpilot.common.params import Params; Params().put('SunnyconfPairingCode', 'your-code')"
 ```
 
+## Adding sunnyconf to a device that is already installed
+
+The updater on a device still running pre-sunnyconf code fetches with git's default on-demand submodule
+recursion, which fails the whole fetch the moment a commit introduces the new submodule
+(`Could not access submodule 'sunnyconf'` → "failed to update"). One-time fix over SSH, then update as usual:
+
+```sh
+ssh comma 'git -C /data/openpilot config fetch.recurseSubmodules false'
+```
+
+(`install.py` writes the same setting into `system/updated/updated.py`, so once the sunnyconf commit is
+installed no device needs this again. A fresh install from your fork's URL never hits it.)
+
 ## Keeping up with upstream sunnypilot
 
 Your fork does not update itself — pull upstream into your branch when you want a new release:
