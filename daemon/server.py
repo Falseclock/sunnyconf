@@ -87,6 +87,24 @@ EXTRA_KEYS = {
   "OsmDownloadedDate": {"type": "STRING", "w": False},   # unix ts written by mapd_manager ("Last checked …")
 }
 
+def _extra_coerce(et: str, val):
+  """Coerce a wire value to the Python type Params.put expects for an EXTRA_KEYS param: JSON-typed params
+  (CarPlatformBundle / ModelManager_ActiveBundle) want a dict/list, INT params want an int (ValueError
+  propagates to the caller), BOOL params want a bool. Plain STRING params pass through unchanged."""
+  if isinstance(val, str):
+    s = val.strip()
+    if s[:1] in ("{", "["):
+      try:
+        return json.loads(s)
+      except Exception:
+        return val
+    if et == "INT":
+      return int(s)
+    if et == "BOOL":
+      return s in ("1", "true", "True", "yes", "on")
+  return val
+
+
 # Offline OSM maps live here (same constant as the stock OSM panel); size + delete work on this tree.
 MAP_PATH = Path(Paths.mapd_root()) / "offline"
 
@@ -539,6 +557,8 @@ class _Handler(BaseHTTPRequestHandler):
         return self._send(200, sc)
       if path == "/values":
         return self._send(200, self._values(include_all))
+      if path == "/backup":
+        return self._backup()
       if path == "/maps":
         return self._send(200, self._maps())
       if path == "/maps/check":
@@ -587,6 +607,8 @@ class _Handler(BaseHTTPRequestHandler):
       m = re.match(r"^/drives/([0-9a-f]{8}--[0-9a-f]{10})/clip$", path)
       if m:
         return self._make_clip(m.group(1), self._body_json())
+      if path == "/restore":
+        return self._restore()
       if path.startswith("/actions/"):
         return self._action(unquote(path[len("/actions/"):]))
       return self._send(404, {"error": "not_found"})
@@ -735,6 +757,199 @@ class _Handler(BaseHTTPRequestHandler):
     p = self._params
     idx = schema_gen.index_by_key(include_all=include_all)
     return {key: values.current_transport(p, key, ie.type_token) for key, ie in idx.items()}
+
+  # ── backup / restore ──────────────────────────────────────────────────────────────────────────────
+
+  def _backup(self):
+    """One-file settings backup: every schema param value + the custom-page state (car, model, favourites)
+    + the offline-maps selection. POST /restore pushes each piece back through the same write paths the
+    UI uses, so map/model downloads restart in the background."""
+    st = self._status()
+    # Only what /restore would actually write: user-visible schema params of writable types. include_all
+    # would drag in runtime/diagnostic params (caches, CarParams blobs, ping times) — megabytes of noise
+    # that restore rejects anyway.
+    idx = schema_gen.index_by_key(include_all=False)
+    vals = {k: values.current_transport(self._params, k, ie.type_token) for k, ie in idx.items()
+            if ie.type_token in _WRITABLE_TYPES
+            and k not in SECRET_PARAMS and k not in BLOCKED_PARAMS and k not in EXTRA_KEYS}
+    return self._send(200, {
+      "sunnyconf_backup": 1,
+      "created": int(time.time()),
+      "device": {k: st.get(k) for k in ("name", "dongle_id", "serial", "model", "device_type", "version",
+                                        "sunnypilot_commit", "schema_version")},
+      "values": vals,
+      "extras": {
+        **{k: values.current_transport(self._params, k, EXTRA_KEYS[k]["type"])
+           for k in ("CarPlatformBundle", "ModelManager_ActiveBundle", "ModelManager_Favs")},
+        # sunnylink identity: the GitHub pairing hangs off this id + the device key in /persist (which
+        # survives even a full reset) — restoring the id restores the pairing. Guarded by serial on restore.
+        "SunnylinkDongleId": self._params.get("SunnylinkDongleId") or "",
+        # SSH access: the enable toggle is a schema value, but the authorized keys + username live here so
+        # SSH works immediately after a restore (these are PUBLIC keys — safe to carry in the backup file)
+        "GithubUsername": self._params.get("GithubUsername") or "",
+        "GithubSshKeys": self._params.get("GithubSshKeys") or "",
+      },
+      "maps": {
+        "countries": _load_osm_countries(),
+        "state_name": self._params.get("OsmStateName") or "",
+        "state_title": self._params.get("OsmStateTitle") or "",
+      },
+    })
+
+  def _restore(self):
+    """Apply a /backup file. Offroad only. Values go through the same validation as PUT /params/<key>;
+    unknown keys (another fork/version) are skipped and reported, never written blind. Car selection and
+    favourites are written raw; the model is re-downloaded by ref via ModelManager_DownloadIndex; the map
+    selection is saved and the mapd download cycle is kicked — both continue in the background."""
+    if is_onroad(self._params):
+      return self._send(409, {"error": "offroad_required"})
+    body = self._body_json()
+    if body.get("sunnyconf_backup") != 1:
+      return self._send(400, {"error": "not_a_backup"})
+    vals = body.get("values") or {}
+    if not isinstance(vals, dict):
+      return self._send(400, {"error": "bad_values"})
+
+    idx = schema_gen.index_by_key(include_all=True)
+    applied, unknown, invalid, skipped = 0, [], {}, []
+    for key in sorted(vals):
+      if key in SECRET_PARAMS or key in BLOCKED_PARAMS or key in EXTRA_KEYS:
+        skipped.append(key)   # secrets/trust params never restore; extras go through their own path below
+        continue
+      ie = idx.get(key)
+      if ie is None:
+        unknown.append(key)
+        continue
+      if ie.type_token not in _WRITABLE_TYPES:
+        skipped.append(key)
+        continue
+      try:
+        self._params.put(key, values.parse_incoming(ie.entry, ie.type_token, vals[key]))
+        applied += 1
+      except Exception as e:   # one bad value must not stop the rest
+        invalid[key] = str(e)
+
+    extras = body.get("extras") or {}
+    extras_written = []
+    for key in ("CarPlatformBundle", "ModelManager_Favs"):
+      raw = extras.get(key)
+      if raw in (None, "", "{}"):
+        continue
+      try:
+        self._params.put(key, _extra_coerce(EXTRA_KEYS[key]["type"], raw))
+        extras_written.append(key)
+      except Exception as e:
+        invalid[key] = str(e)
+    # SSH: keys + username go back verbatim, so an SshEnabled=1 from `values` is immediately usable
+    for key in ("GithubUsername", "GithubSshKeys"):
+      raw = extras.get(key)
+      if raw:
+        try:
+          self._params.put(key, str(raw))
+          extras_written.append(key)
+        except Exception as e:
+          invalid[key] = str(e)
+
+    report = {
+      "ok": True, "applied": applied, "extras": extras_written,
+      "unknown": unknown, "invalid": invalid, "skipped": skipped,
+      "model": self._restore_model(extras.get("ModelManager_ActiveBundle")),
+      "maps": self._restore_maps(body.get("maps") or {}),
+      "sunnylink": self._restore_sunnylink_id(body, extras.get("SunnylinkDongleId")),
+    }
+    cloudlog.warning(f"sunnyconf.restore: applied={applied} unknown={len(unknown)} invalid={len(invalid)} "
+                     f"model={report['model']} maps={report['maps']}")
+    return self._send(200, report)
+
+  def _restore_model(self, active_raw) -> str:
+    """Re-select the backed-up model by matching it against the current manifest and writing
+    ModelManager_DownloadIndex — the exact write the Models page does, so the manager downloads and
+    activates it in the background. Indexes shift between manifest versions, so match by ref/name."""
+    if not active_raw:
+      return "none"
+    try:
+      want = json.loads(active_raw) if isinstance(active_raw, str) else dict(active_raw)
+    except Exception:
+      return "unreadable"
+    if not want:
+      return "none"   # Default model — nothing to download
+    try:
+      raw = self._params.get("ModelManager_ModelsCache")   # JSON-typed: this fork's get() returns a dict
+      man = raw if isinstance(raw, dict) else json.loads(raw or "")
+      bundles = man.get("bundles") or []
+    except Exception:
+      bundles = []
+    if not bundles:
+      # no manifest yet (fresh install / offline) — ask the manager to refetch it; re-run restore (or pick
+      # the model by hand) once the device has internet
+      try:
+        self._params.put("ModelManager_LastSyncTime", 0)
+      except Exception:
+        pass
+      return "no_manifest"
+    # ActiveBundle is written camelCase (internalName/displayName) while the manifest bundles are
+    # snake_case (ref/short_name/display_name) — compare every name either side carries.
+    name_keys = ("ref", "internalName", "internal_name", "shortName", "short_name", "displayName", "display_name")
+    want_names = {str(want[k]).strip() for k in name_keys if want.get(k)}
+    if not want_names:
+      return "unmatchable"
+    for b in bundles:
+      b_names = {str(b[k]).strip() for k in name_keys if b.get(k)}
+      if want_names & b_names:
+        try:
+          self._params.put("ModelManager_DownloadIndex", int(b.get("index")))
+        except Exception as e:
+          return f"write_failed: {e}"
+        return "downloading:" + str(b.get("display_name") or b.get("short_name") or next(iter(b_names)))
+    return "not_in_manifest"
+
+  def _restore_sunnylink_id(self, body: dict, backed_id) -> str:
+    """Bring the sunnylink (GitHub) pairing back after a full reset. The pairing hangs off SunnylinkDongleId
+    plus the device key in /persist — the key survives everything, so writing the id back restores the
+    pairing. Guarded by hardware serial: a backup from a DIFFERENT device must not steal an identity the
+    server ties to another key. No-op when the device is already registered with the same id."""
+    if not backed_id or backed_id == "UnregisteredDevice":
+      return "none"
+    cur = self._params.get("SunnylinkDongleId") or ""
+    if cur == backed_id:
+      return "unchanged"
+    if cur and cur != "UnregisteredDevice":
+      # the device ALREADY re-registered under a new id — the cloud issued fresh credentials for it, and
+      # forcing the old id back causes an auth mismatch that really breaks the link (verified 2026-07-13).
+      # Restore the id only into the pre-registration window; after that, claim the new id in the dashboard.
+      return "skipped_already_registered"
+    dev = body.get("device") or {}
+    backed_serial = (dev.get("serial") or "").strip()
+    cur_serial = (self._params.get("HardwareSerial") or "").strip()
+    if backed_serial and cur_serial and backed_serial != cur_serial:
+      return "skipped_different_device"
+    self._params.put("SunnylinkDongleId", str(backed_id))
+    return "restored"
+
+  def _restore_maps(self, m: dict) -> str:
+    """Restore the offline-maps selection and kick the download — the same writes as PUT /maps followed
+    by POST /actions/osm_update."""
+    raw = m.get("countries") or []
+    countries = [{"ref": str(c["ref"]).strip(), "title": str(c.get("title") or c["ref"])}
+                 for c in raw if isinstance(c, dict) and (c.get("ref") or "").strip()]
+    if not countries:
+      return "none"
+    _save_osm_countries(countries)
+    _mirror_selection(self._params, countries)
+    # US state selection: _mirror_selection keeps it only while US is selected; write it back after the mirror
+    if any(c["ref"] == "US" for c in countries) and (m.get("state_name") or "").strip():
+      self._params.put("OsmStateName", str(m["state_name"]))
+      self._params.put("OsmStateTitle", str(m.get("state_title") or m["state_name"]))
+    try:
+      if bool(_mem_params().get("OSMDownloadLocations")):
+        return "selected_download_busy"   # selection saved; the running download keeps its own list
+    except Exception:
+      pass
+    nations, states = _osm_selection(self._params)
+    self._params.put("OsmDownloadedDate", str(time.time()))
+    self._params.put_bool("OsmDbUpdatesCheck", False)
+    _mem_params().put("OSMDownloadLocations", {"nations": nations, "states": states})
+    return "downloading"
 
   def _maps(self) -> dict:
     """Everything the app's Maps (OSM) page needs in one poll — mirrors what the stock panel's 1s
@@ -1034,26 +1249,11 @@ class _Handler(BaseHTTPRequestHandler):
     body = self._body_json()
     if "value" not in body:
       return self._send(400, {"error": "missing_value", "key": key})
-    val = body["value"]
-    et = ex.get("type")
-    # Params.put type-checks the value against the param's declared type, so coerce the wire string to the right
-    # Python type: JSON-typed params (CarPlatformBundle / ModelManager_ActiveBundle) want a dict/list, INT params
-    # (ModelManager_DownloadIndex / LastSyncTime) want an int, BOOL params (ModelManager_ClearCache) want a bool.
-    # Plain STRING params pass through unchanged.
-    if isinstance(val, str):
-      s = val.strip()
-      if s[:1] in ("{", "["):
-        try:
-          val = json.loads(s)
-        except Exception:
-          pass
-      elif et == "INT":
-        try:
-          val = int(s)
-        except Exception:
-          return self._send(400, {"error": "not_an_int", "key": key, "value": s})
-      elif et == "BOOL":
-        val = s in ("1", "true", "True", "yes", "on")
+    # Params.put type-checks the value against the param's declared type — see _extra_coerce.
+    try:
+      val = _extra_coerce(ex.get("type"), body["value"])
+    except ValueError:
+      return self._send(400, {"error": "not_an_int", "key": key, "value": body["value"]})
     try:
       self._params.put(key, val)
     except Exception as e:
