@@ -33,8 +33,11 @@ OK, SKIP, FAIL = "applied", "already in place", "ANCHOR NOT FOUND"
 
 
 def patch(rel_path, edits, required):
-  """edits: list of (anchor, insert, where) — where is 'before' or 'after' the first anchor occurrence.
-  Each edit is independently idempotent: skipped when its insert text is already in the file."""
+  """edits: list of (anchor, insert, where[, probe]) — where is 'before' or 'after' the first anchor
+  occurrence. Each edit is independently idempotent: skipped when its probe (default: the insert text
+  itself) is already in the file. Give an explicit probe when only part of the insert is load-bearing
+  (e.g. the code line, not the comment above it), so a hand-made or older-format integration is
+  recognized instead of duplicated."""
   path = os.path.join(ROOT, rel_path)
   if not os.path.exists(path):
     print(f"[{'FAIL' if required else 'warn'}] {rel_path}: file not found")
@@ -42,8 +45,9 @@ def patch(rel_path, edits, required):
   with open(path, encoding="utf-8") as f:
     text = f.read()
   results, ok = [], True
-  for anchor, insert, where in edits:
-    if insert.strip() in text:
+  for anchor, insert, where, *rest in edits:
+    probe = rest[0] if rest else insert.strip()
+    if probe in text:
       results.append(SKIP)
       continue
     i = text.find(anchor)
@@ -80,6 +84,7 @@ def main():
     'if os.path.exists(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "sunnyconf", "daemon", "main.py")):\n'
     '  procs.append(PythonProcess("sunnyconf", "sunnyconf.daemon.main", always_run, restart_if_crash=True))\n\n',
     "before",
+    'PythonProcess("sunnyconf"',  # an older/hand-made registration counts as integrated
   )], required=True)
 
   # 2. pairing-code param. DONT_LOG: it is a secret; PERSISTENT: survives reboots.
@@ -88,6 +93,7 @@ def main():
     '\n\n    // sunnyconf (WiFi config daemon — https://github.com/Falseclock/sunnyconf)\n'
     '    {"SunnyconfPairingCode", {PERSISTENT | DONT_LOG, STRING}},',
     "before",
+    '"SunnyconfPairingCode"',  # the key itself is what matters, not the comment above it
   )], required=True)
 
   # ── BEST-EFFORT ─────────────────────────────────────────────────────────────────────────────────────
@@ -118,6 +124,7 @@ def main():
       '      callback=self._set_pairing_code,\n'
       '    )\n\n',
       "before",
+      '_pairing_code_btn = button_item_sp(',
     ),
     (
       'button_item_sp(lambda: tr("Change Language"), lambda: tr("CHANGE"), callback=self._show_language_dialog),\n'
@@ -139,6 +146,7 @@ def main():
       '      password_mode=True,\n'
       '    ).show()\n\n',
       "before",
+      'def _set_pairing_code(',
     ),
   ], required=False)
 
@@ -158,6 +166,7 @@ def main():
       '      gui_app.push_widget(BigInputDialog("enter pairing code...", cur, minimum_length=0, confirm_callback=_save))\n'
       '    pairing_code_btn.set_click_callback(_open_pairing_code)\n\n',
       "before",
+      'pairing_code_btn.set_click_callback(',
     ),
     (
       "      PairBigButton(),\n",
