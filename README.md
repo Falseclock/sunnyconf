@@ -1,0 +1,124 @@
+# sunnyconf
+
+Schema-driven **local configuration** for [sunnypilot](https://github.com/sunnypilot/sunnypilot): edit the
+car's params over WiFi from a native Android app — no internet, no comma/sunnylink account, and no APK
+rebuild when new toggles ship. The settings schema is derived **live on the device** (primarily from the
+sunnylink SDUI `settings_ui.json` plus the params registry), so settings added upstream *or* in your fork
+appear in the app automatically.
+
+This repository is the **on-device daemon**. It is designed to be added to an openpilot/sunnypilot fork as
+a git submodule at `sunnyconf/`. The Android client lives in
+[**Falseclock/sunnyconf-app**](https://github.com/Falseclock/sunnyconf-app) — grab the APK from its
+Releases page.
+
+```
+your-openpilot-fork/
+└── sunnyconf/          ← this repo, as a submodule
+    ├── daemon/         stdlib-only Python service: HTTP :8765 + mDNS (_sunnyconf._tcp)
+    ├── install.py      wires the daemon into the surrounding checkout (5 small edits)
+    ├── scripts/        dev helpers (deploy, smoke test, discovery)
+    └── tools/          head-unit helpers (screen recording, fake ignition)
+```
+
+The daemon is **stdlib-only** — nothing to `pip install`, which is what makes it deployable on AGNOS
+(the comma device image has no writable Python environment).
+
+## Why you need your own fork
+
+The openpilot updater keeps the device an exact mirror of **the remote branch it was installed from**: on
+every update it does `reset --hard` + `git clean -xdff` (deleting untracked files) and then
+`git submodule update --init --recursive`. Two consequences:
+
+- anything you only copy onto the device is deleted on the next update — the integration has to be
+  **committed to the branch your device installs from**;
+- once it *is* committed there, updates take care of themselves: the submodule is fetched and initialized
+  automatically, on every device that installs your branch.
+
+**This is also true if you drive on the official sunnypilot builds today**: you cannot add sunnyconf to a
+repo you don't control, so you need your own fork of sunnypilot with your driving branch + sunnyconf on
+top of it. Keeping that fork current is a two-command routine — see
+[Keeping up with upstream](#keeping-up-with-upstream-sunnypilot).
+
+## Install
+
+On your PC, in a clone of **your** fork, on the branch your device installs from:
+
+```sh
+git submodule add https://github.com/Falseclock/sunnyconf.git sunnyconf
+python3 sunnyconf/install.py     # idempotent; prints what it changed
+git add -A
+git commit -m "add sunnyconf"
+git push
+```
+
+Then install your branch on the device as usual (custom software URL, or an existing install just
+updates itself). After the reboot the daemon is running: it announces itself over mDNS and serves
+HTTP on port 8765.
+
+Finally: set a pairing code on the device (Settings → Device → **Sunnyconf Pairing Code**), install the
+[app](https://github.com/Falseclock/sunnyconf-app/releases) on your phone (or head unit), and pair.
+
+### What install.py edits
+
+Five files, nothing else — re-running it is always safe:
+
+| file | why | |
+|---|---|---|
+| `system/manager/process_config.py` | registers the managed process (guarded — a missing submodule is skipped, never crash-loops manager) | required |
+| `common/params_keys.h` | declares `SunnyconfPairingCode` (`PERSISTENT \| DONT_LOG`) | required |
+| `pyproject.toml` | adds `sunnyconf` to pytest testpaths | best-effort |
+| `selfdrive/ui/sunnypilot/layouts/settings/device.py` | pairing-code button, comma 3/3x UI | best-effort |
+| `selfdrive/ui/mici/layouts/settings/device.py` | pairing-code button, comma 4 UI | best-effort |
+
+If a *best-effort* edit reports `ANCHOR NOT FOUND` (an upstream UI refactor moved things around), the
+daemon still works; set the pairing code from a device shell instead:
+
+```python
+python3 -c "from openpilot.common.params import Params; Params().put('SunnyconfPairingCode', 'your-code')"
+```
+
+## Keeping up with upstream sunnypilot
+
+Your fork does not update itself — pull upstream into your branch when you want a new release:
+
+```sh
+git remote add upstream https://github.com/sunnypilot/sunnypilot.git   # once
+git fetch upstream
+git merge upstream/master        # or whichever upstream branch/tag you follow
+python3 sunnyconf/install.py     # re-applies anything the merge lost; no-op otherwise
+git push
+```
+
+If the merge conflicts inside one of the five integrated files, take the upstream side and re-run
+`install.py` — it re-inserts the integration into the fresh upstream text.
+
+## Updating sunnyconf itself
+
+```sh
+git submodule update --remote sunnyconf
+python3 sunnyconf/install.py     # in case the new version needs a new integration point
+git commit -am "bump sunnyconf"
+git push
+```
+
+Devices pick the new daemon up with their next normal update.
+
+## Uninstall
+
+```sh
+git rm sunnyconf
+git checkout -- system/manager/process_config.py common/params_keys.h pyproject.toml selfdrive/ui
+git commit -m "remove sunnyconf" && git push
+```
+
+## Development
+
+- `daemon/tests/` — run with `pytest sunnyconf` from the openpilot root.
+- `scripts/` — deploy to a device over SSH, smoke-test the endpoints, mDNS discovery from a PC.
+- The HTTP contract the app renders from is documented in the source (`daemon/server.py`,
+  `daemon/schema_gen.py`).
+
+## License
+
+MIT — see [LICENSE](LICENSE). sunnypilot and openpilot are their respective projects; this daemon only
+reads their param/SDUI declarations at runtime.
