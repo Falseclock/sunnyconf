@@ -48,7 +48,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
 from openpilot.system.hardware.hw import Paths
-from . import BLOCKED_PARAMS, DEFAULT_PORT, SCHEMA_VERSION
+from . import BLOCKED_PARAMS, DAEMON_VERSION, DEFAULT_PORT, SCHEMA_VERSION
 from . import auth
 from . import device
 from . import drives
@@ -749,6 +749,7 @@ class _Handler(BaseHTTPRequestHandler):
       "serial": info["serial"],
       "version": info["version"],           # software version string (Home card + status pill)
       "schema_version": SCHEMA_VERSION,
+      "daemon_version": DAEMON_VERSION,     # the app warns when this is older than its features need
       "sunnypilot_commit": sp["commit"],
       "branch": sp["branch"],
     }
@@ -840,7 +841,10 @@ class _Handler(BaseHTTPRequestHandler):
         extras_written.append(key)
       except Exception as e:
         invalid[key] = str(e)
-    # SSH: keys + username go back verbatim, so an SshEnabled=1 from `values` is immediately usable
+    # SSH: keys + username go back verbatim, so an SshEnabled=1 from `values` is immediately usable.
+    # DELIBERATE exception to BLOCKED_PARAMS (these grant SSH trust): a restore is a paired client replaying
+    # a whole backup after an explicit on-screen confirmation that names the SSH keys — unlike a single
+    # blind PUT, which stays refused. The keys in the file are public keys the user backed up himself.
     for key in ("GithubUsername", "GithubSshKeys"):
       raw = extras.get(key)
       if raw:

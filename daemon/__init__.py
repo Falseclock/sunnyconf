@@ -18,6 +18,10 @@ See sunnyconf/README.md and docs/ARCHITECTURE.md for the full design and contrac
 """
 
 SCHEMA_VERSION = 1
+# The daemon's own release version, surfaced in /status as daemon_version. The app compares it against the
+# minimum its features need and tells the user to update the submodule when the daemon is older. Bump on
+# every endpoint/contract addition (backup/restore shipped in 1.1.0).
+DAEMON_VERSION = "1.1.0"
 DEFAULT_PORT = 8765
 SERVICE_TYPE = "_sunnyconf._tcp.local."
 SERVICE_INSTANCE = "comma"   # generic fallback only; the real instance name is derived per-device (device.py)
