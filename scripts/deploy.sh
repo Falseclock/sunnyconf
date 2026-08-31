@@ -4,7 +4,7 @@
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 say "deploy sunnyconf/  ->  $SUNNYCONF_HOST:$OP_DIR/sunnyconf/"
-rsync -az --delete --exclude='__pycache__' --exclude='*.pyc' --exclude='scripts/' \
+rsync -az --delete --exclude='__pycache__' --exclude='.git' --exclude='*.pyc' --exclude='scripts/' \
   -e "ssh ${SSH_OPTS[*]}" \
   "$REPO_ROOT/sunnyconf/" "$SUNNYCONF_HOST:$OP_DIR/sunnyconf/"
 
