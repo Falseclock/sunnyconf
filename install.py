@@ -169,6 +169,14 @@ def main():
   # 5. comma 4 (mici) settings UI: same button, BigButton style.
   patch("selfdrive/ui/mici/layouts/settings/device.py", [
     (
+      # BigInputDialog exists in the tree but stock device.py doesn't import it — without this line the
+      # button below dies with NameError on tap (caught in the field 2026-09-01). A redundant standalone
+      # import on trees that already have it combined into another import line is harmless.
+      "from openpilot.selfdrive.ui.mici.widgets.pairing_dialog import PairingDialog",
+      "from openpilot.selfdrive.ui.mici.widgets.dialog import BigInputDialog\n",
+      "before",
+    ),
+    (
       "    self._scroller.add_widgets([",
       '    # sunnyconf pairing code — secret typed into the sunnyconf app to pair a device over Wi-Fi\n'
       '    pairing_code_btn = BigButton("pairing\\ncode",\n'
