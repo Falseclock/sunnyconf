@@ -60,12 +60,13 @@ Finally: set a pairing code on the device (Settings → Device → **Sunnyconf P
 
 ### What install.py edits
 
-Five files, nothing else — re-running it is always safe:
+Six files, nothing else — re-running it is always safe:
 
 | file | why | |
 |---|---|---|
 | `system/manager/process_config.py` | registers the managed process (guarded — a missing submodule is skipped, never crash-loops manager) | required |
 | `common/params_keys.h` | declares `SunnyconfPairingCode` (`PERSISTENT \| DONT_LOG`) | required |
+| `system/updated/updated.py` | `fetch.recurseSubmodules=false` — a submodule first appearing in fetched commits must not fail the updater's fetch | best-effort |
 | `pyproject.toml` | adds `sunnyconf` to pytest testpaths | best-effort |
 | `selfdrive/ui/sunnypilot/layouts/settings/device.py` | pairing-code button, comma 3/3x UI | best-effort |
 | `selfdrive/ui/mici/layouts/settings/device.py` | pairing-code button, comma 4 UI | best-effort |
@@ -120,7 +121,7 @@ Devices pick the new daemon up with their next normal update.
 
 ```sh
 git rm sunnyconf
-git checkout -- system/manager/process_config.py common/params_keys.h pyproject.toml selfdrive/ui
+git checkout -- system/manager/process_config.py common/params_keys.h system/updated/updated.py pyproject.toml selfdrive/ui
 git commit -m "remove sunnyconf" && git push
 ```
 
