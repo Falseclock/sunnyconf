@@ -51,6 +51,16 @@ git commit -m "add sunnyconf"
 git push
 ```
 
+If `git submodule add` refuses with *"A git directory for 'sunnyconf' is found locally"* — leftovers of an
+earlier add/remove cycle — clean them out and retry:
+
+```sh
+git submodule deinit -f sunnyconf 2>/dev/null; git rm -rf --cached sunnyconf 2>/dev/null
+rm -rf sunnyconf .git/modules/sunnyconf
+git config --remove-section submodule.sunnyconf 2>/dev/null
+git submodule add https://github.com/Falseclock/sunnyconf.git sunnyconf
+```
+
 Then install your branch on the device as usual (custom software URL, or an existing install just
 updates itself). After the reboot the daemon is running: it announces itself over mDNS and serves
 HTTP on port 8765.
@@ -119,8 +129,13 @@ Devices pick the new daemon up with their next normal update.
 
 ## Uninstall
 
+The full teardown — the last `rm` matters: `git rm` leaves the submodule's git directory under
+`.git/modules/`, and a later re-install trips over it:
+
 ```sh
-git rm sunnyconf
+git submodule deinit -f sunnyconf
+git rm -f sunnyconf
+rm -rf .git/modules/sunnyconf
 git checkout -- system/manager/process_config.py common/params_keys.h system/updated/updated.py pyproject.toml selfdrive/ui
 git commit -m "remove sunnyconf" && git push
 ```
