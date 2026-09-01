@@ -177,10 +177,10 @@ Client-side (Android) log collection is described in the
 
 Fork users never bump anything — the version travels inside the submodule. When changing the daemon:
 
-- **`DAEMON_VERSION`** (`daemon/__init__.py`) — bump on any endpoint/contract addition or change. It is
-  served in `/status`; the app compares it against the oldest daemon its features work with and shows an
-  "update daemon on the device" hint when yours is older. Internal fixes with no contract change don't
-  need a bump.
+- **`DAEMON_VERSION`** (`daemon/__init__.py`) — semver: bump the MINOR on any endpoint/contract addition
+  or change, the PATCH on fixes (so a bug report's "daemon 1.1.x" identifies the build). It is served in
+  `/status`; the app compares it against the oldest daemon its features work with and shows an
+  "update daemon on the device" hint when yours is older.
 - **`SCHEMA_VERSION`** — bump only if the *shape* of the settings schema contract changes.
 - In the app, raise `MIN_DAEMON_VERSION` (`StatusPopover.java`) in the same release that starts relying
   on the new daemon capability.
