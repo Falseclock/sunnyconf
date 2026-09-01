@@ -139,12 +139,16 @@ class _StdlibResponder:
   def _loop(self):
     sock = self._sock
     last_announce = 0.0
+    burst = 3    # RFC 6762 §8.3: a few spaced startup announcements — WiFi multicast is lossy, and a
+                 # single lost packet otherwise means waiting out a whole 30s beacon interval
     while not self._stop.is_set():
-      # periodic unsolicited announcement
+      # startup burst (1s apart), then the periodic unsolicited announcement every 30s
       now = time.monotonic()
-      if now - last_announce > 30:
+      if now - last_announce > (1.0 if burst > 0 else 30.0):
         self._send(self._answer_packet())
         last_announce = now
+        if burst > 0:
+          burst -= 1
       try:
         sock.settimeout(1.0)
         data, addr = sock.recvfrom(9000)
