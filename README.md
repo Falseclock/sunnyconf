@@ -173,6 +173,18 @@ the swaglog lines instead), the `grep -a sunnyconf` tail, and the newest crash f
 Client-side (Android) log collection is described in the
 [app README](https://github.com/Falseclock/sunnyconf-app#logs).
 
+## Versioning (maintainers)
+
+Fork users never bump anything — the version travels inside the submodule. When changing the daemon:
+
+- **`DAEMON_VERSION`** (`daemon/__init__.py`) — bump on any endpoint/contract addition or change. It is
+  served in `/status`; the app compares it against the oldest daemon its features work with and shows an
+  "update daemon on the device" hint when yours is older. Internal fixes with no contract change don't
+  need a bump.
+- **`SCHEMA_VERSION`** — bump only if the *shape* of the settings schema contract changes.
+- In the app, raise `MIN_DAEMON_VERSION` (`StatusPopover.java`) in the same release that starts relying
+  on the new daemon capability.
+
 ## Development
 
 - `daemon/tests/` — run with `pytest sunnyconf` from the openpilot root.
