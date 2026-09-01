@@ -70,16 +70,17 @@ Finally: set a pairing code on the device (Settings → Device → **Sunnyconf P
 
 ### What install.py edits
 
-Six files, nothing else — re-running it is always safe:
+Six files, nothing else — re-running it is always safe. The last column is what happens when an upstream
+refactor moves a patch's anchor and it can NOT be applied:
 
-| file | why | |
+| file | why | if it can't apply |
 |---|---|---|
-| `system/manager/process_config.py` | registers the managed process (guarded — a missing submodule is skipped, never crash-loops manager) | required |
-| `common/params_keys.h` | declares `SunnyconfPairingCode` (`PERSISTENT \| DONT_LOG`) | required |
-| `system/updated/updated.py` | `fetch.recurseSubmodules=false` — a submodule first appearing in fetched commits must not fail the updater's fetch | best-effort |
-| `pyproject.toml` | adds `sunnyconf` to pytest testpaths | best-effort |
-| `selfdrive/ui/sunnypilot/layouts/settings/device.py` | pairing-code button, comma 3/3x UI | best-effort |
-| `selfdrive/ui/mici/layouts/settings/device.py` | pairing-code button, comma 4 UI | best-effort |
+| `system/manager/process_config.py` | registers the managed process (guarded — a missing submodule is skipped, never crash-loops manager) | **install fails** — nothing works without it |
+| `common/params_keys.h` | declares `SunnyconfPairingCode` (`PERSISTENT \| DONT_LOG`) | **install fails** — nothing works without it |
+| `system/updated/updated.py` | `fetch.recurseSubmodules=false` — a submodule first appearing in fetched commits must not fail the updater's fetch | warns; only future *new* submodules are affected (a fresh install already knows this one) |
+| `pyproject.toml` | adds `sunnyconf` to pytest testpaths | warns; dev machines only |
+| `selfdrive/ui/sunnypilot/layouts/settings/device.py` | pairing-code button, comma 3/3x UI | warns; set the code over SSH instead (below) |
+| `selfdrive/ui/mici/layouts/settings/device.py` | pairing-code button, comma 4 UI | warns; set the code over SSH instead (below) |
 
 If a *best-effort* edit reports `ANCHOR NOT FOUND` (an upstream UI refactor moved things around), the
 daemon still works; set the pairing code from a device shell instead:
