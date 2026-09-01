@@ -141,6 +141,38 @@ git checkout -- system/manager/process_config.py common/params_keys.h system/upd
 git commit -m "remove sunnyconf" && git push
 ```
 
+## Troubleshooting & collecting logs
+
+Quick health check from anything on the same WiFi (no auth needed):
+`http://<device-ip>:8765/health` → `{"ok": true}`.
+
+Everything else over SSH on the device:
+
+```sh
+pgrep -af sunnyconf.daemon.main            # is the daemon process alive?
+curl -s http://127.0.0.1:8765/health       # does it answer locally?
+
+# daemon log lines (the daemon logs through openpilot's cloudlog into swaglog)
+grep -a sunnyconf /data/log/swaglog.* | tail -50        # zcat for the rotated .gz ones
+
+# a crashed managed process leaves a python traceback here — grab the newest file
+ls -t /data/community/crashes/ | head -3
+tail -40 "/data/community/crashes/$(ls -t /data/community/crashes/ | head -1)"
+
+# device didn't pick up your fork update?
+cat /data/params/d/LastUpdateException; echo
+cat /data/params/d/UpdaterState; echo
+
+# app can't discover the device? check the mDNS advert is actually out
+avahi-browse -rpt _sunnyconf._tcp
+```
+
+When opening an issue, include: what you tapped and what happened, `GET /status` output (any browser:
+`http://<device-ip>:8765/status` won't work without a token — copy it from the app's device page or use
+the swaglog lines instead), the `grep -a sunnyconf` tail, and the newest crash file if there is one.
+Client-side (Android) log collection is described in the
+[app README](https://github.com/Falseclock/sunnyconf-app#logs).
+
 ## Development
 
 - `daemon/tests/` — run with `pytest sunnyconf` from the openpilot root.
